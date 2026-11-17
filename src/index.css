@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink-0: oklch(0.145 0.008 145);
+  --ink-1: oklch(0.18 0.008 145);
+  --ink-2: oklch(0.225 0.008 145);
+  --ink-3: oklch(0.32 0.008 145);
+  --paper: oklch(0.94 0.012 85);
+  --muted: oklch(0.66 0.012 85);
+  --accent: oklch(0.65 0.21 37);
+  --accent-ink: oklch(0.17 0.025 40);
+  --line: oklch(0.32 0.008 145 / 0.7);
+  color: var(--paper);
+  background: var(--ink-0);
+  font-family: "Helvetica Neue", "Nimbus Sans", Arial, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-width: 320px; min-height: 100dvh; }
+body { overflow: hidden; }
+button, input, textarea, select { font: inherit; }
+button, select, input[type="range"], input[type="color"] { cursor: pointer; }
+button { color: inherit; }
+button:disabled, input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; opacity: .42; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, canvas:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 2px;
+}
+::selection { color: var(--accent-ink); background: var(--accent); }
