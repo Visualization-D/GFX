@@ -1,5 +1,5 @@
 import Delaunator from 'delaunator'
-import type { CanvasSize, LabLayer, PathCommand, PointerState } from '../types/lab'
+import type { CanvasSelection, CanvasSize, LabLayer, LayerGroup, PathCommand, PointerState } from '../types/lab'
 
 const TAU = Math.PI * 2
 const clamp = (value: number, min = 0, max = 1) => Math.max(min, Math.min(max, value))
@@ -81,6 +81,20 @@ function traceGeometricShape(ctx: CanvasRenderingContext2D, type: number, radius
   } else {
     ctx.arc(0, 0, radius, 0, TAU)
     ctx.arc(0, 0, radius * 0.52, 0, TAU, true)
+  }
+}
+
+function traceSelection(ctx: CanvasRenderingContext2D, selection: CanvasSelection, width: number, height: number) {
+  ctx.beginPath()
+  if (selection.type === 'marquee' && selection.points.length === 2) {
+    const [a, b] = selection.points
+    ctx.rect(a.x * width, a.y * height, (b.x - a.x) * width, (b.y - a.y) * height)
+  } else {
+    selection.points.forEach((point, index) => {
+      if (index === 0) ctx.moveTo(point.x * width, point.y * height)
+      else ctx.lineTo(point.x * width, point.y * height)
+    })
+    ctx.closePath()
   }
 }
 
@@ -182,6 +196,8 @@ export class LabEngine {
   readonly canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
   private layerSeeds: ReadonlyMap<string, HTMLImageElement> = new Map()
+  private layerShapeImages: ReadonlyMap<string, HTMLImageElement[]> = new Map()
+  private kineticSprings = new Map<string, { x: number; y: number; vx: number; vy: number }>()
   private defaultSeed = createDefaultSeed()
   private sourceCache = new Map<string, HTMLCanvasElement>()
   private layerCache = new Map<string, HTMLCanvasElement>()
@@ -199,6 +215,10 @@ export class LabEngine {
     this.layerSeeds = images
     this.sourceCache.clear()
     this.meshCache.clear()
+  }
+
+  setLayerShapeImages(images: ReadonlyMap<string, HTMLImageElement[]>) {
+    this.layerShapeImages = images
   }
 
   private source(size: CanvasSize, layerId?: string) {
@@ -249,7 +269,7 @@ export class LabEngine {
     return next
   }
 
-  render(layers: LabLayer[], size: CanvasSize, time: number, pointer: PointerState, background: string, palette: string[]) {
+  render(layers: LabLayer[], size: CanvasSize, time: number, pointer: PointerState, background: string, palette: string[], groups: LayerGroup[] = []) {
     this.lastTime = time
     this.palette = palette.length ? palette : this.palette
     if (this.canvas.width !== size.width || this.canvas.height !== size.height) {
@@ -264,11 +284,14 @@ export class LabEngine {
     for (let layerIndex = layers.length - 1; layerIndex >= 0; layerIndex -= 1) {
       const layer = layers[layerIndex]
       if (!layer.visible || layer.opacity <= 0) continue
+      const group = layer.groupId ? groups.find((item) => item.id === layer.groupId) : undefined
+      if (group && !group.visible) continue
       const canvas = this.layerCanvas(layer, size)
       const ctx = canvas.getContext('2d')!
       ctx.clearRect(0, 0, size.width, size.height)
       if (layer.kind === 'text') this.renderText(ctx, layer, size)
       else this.renderEffect(ctx, canvas, layer, size, time, this.smoothPointer(layer, pointer))
+      this.applyLayerMask(ctx, layer, size)
       this.ctx.save()
       this.ctx.globalAlpha = layer.opacity
       this.ctx.globalCompositeOperation = layer.blend
@@ -284,7 +307,38 @@ export class LabEngine {
     const pointer = this.pointers.get(layer.id) ?? { x: 0.5, y: 0.5, active: false, hover: false }
     if (layer.kind === 'text') this.renderText(ctx, layer, size)
     else this.renderEffect(ctx, canvas, layer, size, this.lastTime, pointer)
+    this.applyLayerMask(ctx, layer, size)
     return canvas
+  }
+
+  private applyLayerMask(ctx: CanvasRenderingContext2D, layer: LabLayer, size: CanvasSize) {
+    if (!layer.maskStrokes?.length) return
+    const mask = makeCanvas(size.width, size.height)
+    const maskCtx = mask.getContext('2d')!
+    maskCtx.fillStyle = '#ffffff'
+    maskCtx.fillRect(0, 0, size.width, size.height)
+    maskCtx.lineCap = 'round'
+    maskCtx.lineJoin = 'round'
+    for (const stroke of layer.maskStrokes) {
+      maskCtx.strokeStyle = stroke.erase ? '#000000' : '#ffffff'
+      maskCtx.fillStyle = stroke.erase ? '#000000' : '#ffffff'
+      maskCtx.lineWidth = Math.max(1, stroke.size)
+      maskCtx.beginPath()
+      stroke.points.forEach((point, index) => {
+        const x = point.x * size.width
+        const y = point.y * size.height
+        if (index === 0) maskCtx.moveTo(x, y)
+        else maskCtx.lineTo(x, y)
+      })
+      if (stroke.points.length === 1) {
+        maskCtx.arc(stroke.points[0].x * size.width, stroke.points[0].y * size.height, stroke.size / 2, 0, TAU)
+        maskCtx.fill()
+      } else maskCtx.stroke()
+    }
+    ctx.save()
+    ctx.globalCompositeOperation = 'destination-in'
+    ctx.drawImage(mask, 0, 0)
+    ctx.restore()
   }
 
   private renderEffect(
@@ -297,13 +351,14 @@ export class LabEngine {
   ) {
     switch (layer.effect) {
       case 'shapes': return this.renderShapeField(ctx, layer, size, time, pointer)
+      case 'image': return coverDraw(ctx, this.source(size, layer.id), size.width, size.height)
       case 'liquid': return this.renderLiquid(ctx, layer, size, time, pointer)
       case 'flow': return this.renderFlow(ctx, layer, size, time, pointer)
       case 'sketch': return this.renderSketch(ctx, layer, size, time)
       case 'displace': return this.renderDisplace(ctx, layer, size, time, pointer)
       case 'spray': return this.renderSpray(ctx, layer, size, time, pointer)
       case 'triangulate': return this.renderTriangulate(ctx, layer, size)
-      case 'kinetic': return this.renderKinetic(ctx, canvas, layer, size, time)
+      case 'kinetic': return this.renderKinetic(ctx, canvas, layer, size, time, pointer)
       case 'sliced': return this.renderSliced(ctx, layer, size, time, pointer)
     }
   }
@@ -337,13 +392,15 @@ export class LabEngine {
     const margin = Math.min(size.width, size.height) * 0.055
     const cellWidth = (size.width - margin * 2) / columns
     const cellHeight = (size.height - margin * 2) / rows
-    const families: Record<LabLayer['shapeStyle'], number[]> = {
+    const families: Partial<Record<LabLayer['shapeStyle'], number[]>> = {
       mixed: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
       round: [0, 3, 8, 9],
       angular: [1, 2, 4, 6, 7],
       linear: [4, 5],
     }
-    const family = families[layer.shapeStyle] ?? families.mixed
+    const family = families[layer.shapeStyle] ?? families.mixed ?? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    const shapeAssets = this.layerShapeImages.get(layer.id) ?? []
+    const textItems = (layer.shapeText ?? '').split(/\n+/).map((item) => item.trim()).filter(Boolean)
     const geometrySeed = Math.round(layer.params.seed ?? 21) * 1009
     const aspectVariation = layer.params.depth / 100
     const positionJitter = layer.params.jitter / 100
@@ -396,11 +453,26 @@ export class LabEngine {
         ctx.globalAlpha = 0.74 + random(shapeSeed + 11) * 0.26
         ctx.fillStyle = color
         ctx.strokeStyle = color
-        traceGeometricShape(ctx, type, radius, fluidity, random(shapeSeed + 13) * TAU + time * layer.params.speed * 2)
-        if (type !== 5 || fluidity === 0) {
-          if (random(shapeSeed + 12) < layer.params.threshold / 100) ctx.fill('evenodd')
-          else ctx.stroke()
-        } else ctx.stroke()
+        if (layer.shapeStyle === 'custom' && shapeAssets.length) {
+          const asset = shapeAssets[Math.floor(random(shapeSeed + 14) * shapeAssets.length)]
+          const ratio = asset.naturalWidth / Math.max(1, asset.naturalHeight)
+          const width = radius * 2 * Math.min(1, ratio)
+          const height = radius * 2 / Math.max(1, ratio)
+          ctx.drawImage(asset, -width, -height, width * 2, height * 2)
+        } else if (layer.shapeStyle === 'text' && textItems.length) {
+          const token = textItems[Math.floor(random(shapeSeed + 15) * textItems.length)]
+          ctx.font = `${layer.fontWeight} ${Math.max(8, radius * 1.25)}px "${layer.font}", sans-serif`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          if (random(shapeSeed + 12) < layer.params.threshold / 100) ctx.fillText(token, 0, 0, radius * 2.4)
+          else ctx.strokeText(token, 0, 0, radius * 2.4)
+        } else {
+          traceGeometricShape(ctx, type, radius, fluidity, random(shapeSeed + 13) * TAU + time * layer.params.speed * 2)
+          if (type !== 5 || fluidity === 0) {
+            if (random(shapeSeed + 12) < layer.params.threshold / 100) ctx.fill('evenodd')
+            else ctx.stroke()
+          } else ctx.stroke()
+        }
         ctx.restore()
       }
     }
@@ -455,15 +527,19 @@ export class LabEngine {
   private renderFlow(ctx: CanvasRenderingContext2D, layer: LabLayer, size: CanvasSize, time: number, pointer: PointerState) {
     const sample = this.sample(size, 260, layer.id)
     const data = sample.getContext('2d')!.getImageData(0, 0, sample.width, sample.height).data
-    ctx.fillStyle = '#111311'
+    const assets = this.layerShapeImages.get(layer.id) ?? []
+    const tokens = (layer.shapeText ?? '').split(/\n+/).map((item) => item.trim()).filter(Boolean)
+    ctx.fillStyle = layer.secondaryColor ?? '#111311'
     ctx.fillRect(0, 0, size.width, size.height)
     const density = Math.round(layer.params.density)
     const step = size.width / density
     const rows = Math.ceil(size.height / step)
     const bias = layer.params.vector * Math.PI / 180
+    const curvature = (layer.params.fluidity ?? 0) / 100
     ctx.lineCap = 'round'
     for (let y = 0; y <= rows; y += 1) {
       for (let x = 0; x <= density; x += 1) {
+        const indexSeed = y * (density + 1) + x
         const px = x * step
         const py = y * step
         const ix = Math.min(sample.width - 1, Math.floor(x / density * sample.width))
@@ -471,21 +547,38 @@ export class LabEngine {
         const index = (iy * sample.width + ix) * 4
         const light = (data[index] * 0.22 + data[index + 1] * 0.7 + data[index + 2] * 0.08) / 255
         const pointerAngle = Math.atan2(py / size.height - pointer.y, px / size.width - pointer.x)
-        const angle = bias + light * Math.PI * layer.params.depth / 45 + Math.sin(time * layer.params.speed + x * 0.2) * 0.2 + (pointer.active ? pointerAngle * 0.16 : 0)
+        const angle = bias + light * Math.PI * layer.params.depth / 45 + Math.sin(time * layer.params.speed + x * 0.2) * 0.3 + (pointer.hover ? pointerAngle * (pointer.active ? 0.5 : 0.2) : 0)
         const length = layer.params.intensity * (0.35 + light * 0.85)
         const seedColor = `rgb(${data[index]},${data[index + 1]},${data[index + 2]})`
-        ctx.strokeStyle = this.colorFor(layer, seedColor, x + y)
+        const color = this.colorFor(layer, seedColor, indexSeed)
         ctx.globalAlpha = 0.45 + light * 0.55
-        ctx.lineWidth = 1 + light * 2.4
-        ctx.beginPath()
-        ctx.moveTo(px - Math.cos(angle) * length / 2, py - Math.sin(angle) * length / 2)
-        ctx.lineTo(px + Math.cos(angle) * length / 2, py + Math.sin(angle) * length / 2)
-        ctx.stroke()
-        if (light > 0.66) {
-          ctx.fillStyle = '#f4f1e8'
+        ctx.fillStyle = color
+        ctx.strokeStyle = color
+        ctx.lineWidth = Math.max(0.5, layer.params.lineWeight * (0.55 + light * 0.9))
+        if (layer.shapeStyle === 'custom' && assets.length) {
+          const asset = assets[indexSeed % assets.length]
+          ctx.save()
+          ctx.translate(px, py)
+          ctx.rotate(angle)
+          ctx.drawImage(asset, -length / 2, -length / 2, length, length)
+          ctx.restore()
+        } else if (layer.shapeStyle === 'text' && tokens.length) {
+          ctx.save()
+          ctx.translate(px, py)
+          ctx.rotate(angle)
+          ctx.font = `${layer.fontWeight} ${Math.max(8, length * 0.65)}px "${layer.font}", sans-serif`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.fillText(tokens[indexSeed % tokens.length], 0, 0, length * 1.5)
+          ctx.restore()
+        } else {
+          const dx = Math.cos(angle) * length / 2
+          const dy = Math.sin(angle) * length / 2
+          const bend = Math.sin(time * layer.params.speed * 2 + indexSeed) * length * curvature * 0.45
           ctx.beginPath()
-          ctx.arc(px + Math.cos(angle) * length / 2, py + Math.sin(angle) * length / 2, 1.3, 0, TAU)
-          ctx.fill()
+          ctx.moveTo(px - dx, py - dy)
+          ctx.quadraticCurveTo(px - Math.sin(angle) * bend, py + Math.cos(angle) * bend, px + dx, py + dy)
+          ctx.stroke()
         }
       }
     }
@@ -556,34 +649,76 @@ export class LabEngine {
     const source = this.source(size, layer.id)
     const band = Math.round(layer.params.density)
     const intensity = layer.params.intensity
-    ctx.fillStyle = '#111311'
-    ctx.fillRect(0, 0, size.width, size.height)
-    for (let y = 0; y < size.height; y += band) {
-      const signal = Math.sin(y * 0.025 + time * layer.params.speed * 3) + Math.sin(y * 0.006 - time * 0.7)
-      const pointerForce = pointer.active ? Math.exp(-Math.abs(y / size.height - pointer.y) * 12) * (pointer.x - 0.5) : 0
-      const dx = signal * intensity * 0.36 + pointerForce * intensity * 2
-      ctx.drawImage(source, 0, y, size.width, Math.min(band, size.height - y), dx, y, size.width, Math.min(band, size.height - y))
-      if (dx > 0) ctx.drawImage(source, 0, y, dx + 1, band, 0, y, dx + 1, band)
+    const fx = makeCanvas(size.width, size.height)
+    const fxCtx = fx.getContext('2d')!
+    const angle = (layer.params.vector ?? 0) * Math.PI / 180
+    if (layer.shapeStyle === 'angular' || (layer.shapeStyle === 'custom' && (this.layerShapeImages.get(layer.id)?.length ?? 0) > 0)) {
+      const assets = this.layerShapeImages.get(layer.id) ?? []
+      const radius = Math.max(8, layer.params.depth)
+      const count = layer.shapeStyle === 'custom' ? assets.length : Math.ceil(size.width / (radius * 2.4)) * Math.ceil(size.height / (radius * 2.4))
+      for (let index = 0; index < count; index += 1) {
+        const columns = Math.max(1, Math.ceil(size.width / (radius * 2.4)))
+        const x = layer.shapeStyle === 'custom' ? (index + 0.5) / count * size.width : (index % columns + 0.5) * size.width / columns
+        const y = layer.shapeStyle === 'custom' ? size.height * (0.35 + 0.3 * Math.sin(index * 2.1 + time * layer.params.speed)) : (Math.floor(index / columns) + 0.5) * size.height / Math.ceil(count / columns)
+        const dx = Math.sin(index * 1.7 + time * layer.params.speed * 2) * intensity * 0.55
+        const dy = Math.cos(index * 0.9 + time * layer.params.speed) * intensity * 0.25
+        fxCtx.save()
+        fxCtx.translate(x, y)
+        fxCtx.rotate(angle + index * 0.17)
+        if (layer.shapeStyle === 'custom') {
+          const stampSize = Math.ceil(radius * 2)
+          const stamp = makeCanvas(stampSize, stampSize)
+          const stampCtx = stamp.getContext('2d')!
+          stampCtx.drawImage(assets[index % assets.length], 0, 0, stampSize, stampSize)
+          stampCtx.globalCompositeOperation = 'source-in'
+          stampCtx.drawImage(source, -x + radius + dx, -y + radius + dy)
+          fxCtx.drawImage(stamp, -radius, -radius)
+        } else {
+          fxCtx.beginPath()
+          if (index % 2) {
+            fxCtx.moveTo(0, -radius)
+            fxCtx.lineTo(radius, 0)
+            fxCtx.lineTo(0, radius)
+            fxCtx.lineTo(-radius, 0)
+            fxCtx.closePath()
+          } else fxCtx.arc(0, 0, radius, 0, TAU)
+          fxCtx.clip()
+          fxCtx.drawImage(source, -x + dx, -y + dy)
+        }
+        fxCtx.restore()
+      }
+    } else {
+      for (let y = 0; y < size.height; y += band) {
+        const signal = Math.sin(y * 0.025 + time * layer.params.speed * 3) + Math.sin(y * 0.006 - time * 0.7)
+        const pointerForce = pointer.hover ? Math.exp(-Math.abs(y / size.height - pointer.y) * 12) * (pointer.x - 0.5) * (pointer.active ? 2 : 0.6) : 0
+        const dx = signal * intensity * 0.36 + pointerForce * intensity * 2
+        fxCtx.drawImage(source, 0, y, size.width, Math.min(band, size.height - y), dx, y, size.width, Math.min(band, size.height - y))
+      }
     }
     const { red, cyan } = this.channels(size, layer.id)
     const shift = layer.params.rgbShift * (0.5 + Math.sin(time * layer.params.speed) * 0.5)
+    fxCtx.save()
+    fxCtx.globalCompositeOperation = 'screen'
+    fxCtx.globalAlpha = 0.48
+    fxCtx.drawImage(red, -shift + (layer.params.redX ?? 0), (layer.params.redY ?? 0))
+    fxCtx.drawImage(cyan, shift + (layer.params.blueX ?? 0), (layer.params.blueY ?? 0))
+    fxCtx.restore()
+    this.applyColorTreatment(fxCtx, layer, size)
+    ctx.drawImage(source, 0, 0)
     ctx.save()
-    ctx.globalCompositeOperation = 'screen'
-    ctx.globalAlpha = 0.48
-    ctx.drawImage(red, -shift, 0)
-    ctx.drawImage(cyan, shift, 0)
+    if (layer.selection?.points.length) {
+      traceSelection(ctx, layer.selection, size.width, size.height)
+      ctx.clip()
+    }
+    ctx.drawImage(fx, 0, 0)
     ctx.restore()
-    this.applyColorTreatment(ctx, layer, size)
   }
 
   private renderSpray(ctx: CanvasRenderingContext2D, layer: LabLayer, size: CanvasSize, time: number, pointer: PointerState) {
     const sample = this.sample(size, 260, layer.id)
     const data = sample.getContext('2d')!.getImageData(0, 0, sample.width, sample.height).data
-    ctx.fillStyle = '#111311'
+    ctx.fillStyle = layer.secondaryColor ?? '#111311'
     ctx.fillRect(0, 0, size.width, size.height)
-    ctx.globalAlpha = 0.13
-    ctx.drawImage(this.source(size, layer.id), 0, 0)
-    ctx.globalAlpha = 1
     const count = Math.round(layer.params.density)
     const force = layer.params.intensity / 100
     for (let i = 0; i < count; i += 1) {
@@ -606,13 +741,17 @@ export class LabEngine {
       const ix = Math.min(sample.width - 1, Math.floor(rx * sample.width))
       const iy = Math.min(sample.height - 1, Math.floor(ry * sample.height))
       const index = (iy * sample.width + ix) * 4
-      const radius = Math.max(0.35, layer.params.depth * (0.25 + random(i + 30)) * (1 - progress * 0.72))
+      const baseGrainSize = Math.max(1, layer.params.depth)
+      const grainSize = baseGrainSize <= 2.5 ? baseGrainSize : baseGrainSize * (0.7 + random(i + 30) * 0.6)
       const seedColor = `rgb(${data[index]},${data[index + 1]},${data[index + 2]})`
       ctx.fillStyle = this.colorFor(layer, seedColor, i)
-      ctx.globalAlpha = 0.35 + (1 - progress) * 0.65
-      ctx.beginPath()
-      ctx.arc(x, y, radius, 0, TAU)
-      ctx.fill()
+      ctx.globalAlpha = 0.68 + (1 - progress) * 0.32
+      if (grainSize <= 2.5) ctx.fillRect(Math.round(x), Math.round(y), grainSize, grainSize)
+      else {
+        ctx.beginPath()
+        ctx.arc(x, y, grainSize / 2, 0, TAU)
+        ctx.fill()
+      }
     }
     ctx.globalAlpha = 1
   }
@@ -652,7 +791,42 @@ export class LabEngine {
     }
     const ctx = overlay.getContext('2d')!
     ctx.clearRect(0, 0, size.width, size.height)
-    if (!layer || layer.effect !== 'triangulate' || !layer.meshEditing || !layer.visible) return
+    if (!layer || !layer.visible) return
+    if (layer.effect === 'sliced' && layer.splitEditing) {
+      ctx.save()
+      ctx.strokeStyle = '#f44f05'
+      ctx.fillStyle = '#f4f1e8'
+      ctx.lineWidth = Math.max(2, size.width / 500)
+      ctx.setLineDash([10, 7])
+      for (const path of layer.splitPaths ?? []) {
+        ctx.beginPath()
+        path.forEach((point, index) => {
+          const x = point.x * size.width
+          const y = point.y * size.height
+          if (index === 0) ctx.moveTo(x, y)
+          else ctx.lineTo(x, y)
+          if (index === 0 || index === path.length - 1) {
+            ctx.moveTo(x + 5, y)
+            ctx.arc(x, y, 5, 0, TAU)
+          }
+        })
+        ctx.stroke()
+      }
+      ctx.restore()
+      return
+    }
+    if (layer.selection?.points.length) {
+      const selection = layer.selection
+      ctx.save()
+      ctx.strokeStyle = '#f4f1e8'
+      ctx.lineWidth = Math.max(1.5, size.width / 700)
+      ctx.setLineDash([12, 8])
+      ctx.beginPath()
+      traceSelection(ctx, selection, size.width, size.height)
+      ctx.stroke()
+      ctx.restore()
+    }
+    if (layer.effect !== 'triangulate' || !layer.meshEditing) return
     const points = this.meshPoints(layer, size)
     ctx.save()
     ctx.font = `${Math.max(10, size.width / 100)}px Courier New, monospace`
@@ -707,28 +881,45 @@ export class LabEngine {
     }
   }
 
-  private renderKinetic(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, layer: LabLayer, size: CanvasSize, time: number) {
+  private renderKinetic(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, layer: LabLayer, size: CanvasSize, time: number, pointer: PointerState) {
     const mask = makeCanvas(size.width, size.height)
     const maskCtx = mask.getContext('2d')!
     const rows = Math.round(layer.params.density)
     const fontSize = layer.params.depth
+    const elasticity = (layer.params.elasticity ?? 60) / 100
+    const spring = this.kineticSprings.get(layer.id) ?? { x: 0.5, y: 0.5, vx: 0, vy: 0 }
+    const targetX = pointer.hover ? pointer.x : 0.5
+    const targetY = pointer.hover ? pointer.y : 0.5
+    const stiffness = 0.025 + elasticity * 0.11
+    const damping = 0.82 - elasticity * 0.18
+    spring.vx = (spring.vx + (targetX - spring.x) * stiffness) * damping
+    spring.vy = (spring.vy + (targetY - spring.y) * stiffness) * damping
+    spring.x += spring.vx
+    spring.y += spring.vy
+    this.kineticSprings.set(layer.id, spring)
     maskCtx.fillStyle = '#ffffff'
     maskCtx.textAlign = 'center'
     maskCtx.textBaseline = 'middle'
     maskCtx.font = `${layer.fontWeight} ${fontSize}px "${layer.font}", sans-serif`
     for (let row = 0; row < rows; row += 1) {
       const y = (row + 0.5) / rows * size.height
-      const wave = Math.sin(time * layer.params.speed * 2 + row * 0.73)
+      const phase = time * layer.params.speed * 3.2 + row * 0.73
+      const wave = Math.sin(phase) + Math.sin(phase * 0.43 + row) * 0.45
+      const proximity = Math.exp(-Math.abs(y / size.height - spring.y) * 5)
+      const drag = (spring.x - 0.5) * size.width * proximity * (pointer.active ? 0.85 : 0.35)
+      const scatter = (random(row + 91) - 0.5) * (layer.params.jitter ?? 0) * 2
+      const twist = (layer.params.vector ?? 0) * Math.PI / 180 * Math.sin(phase * 0.55)
       maskCtx.save()
-      maskCtx.translate(size.width / 2 + wave * layer.params.intensity * 2, y)
-      maskCtx.scale(1 + wave * layer.params.intensity / 450, 1)
+      maskCtx.translate(size.width / 2 + wave * layer.params.intensity * 2.2 + drag + scatter, y)
+      maskCtx.rotate(twist * proximity)
+      const stretch = 1 + wave * layer.params.intensity / 500 + Math.abs(spring.vx) * elasticity * 5 * proximity
+      maskCtx.scale(stretch, 1 + Math.cos(phase * 1.3) * elasticity * 0.16)
       maskCtx.fillText(layer.text.replace(/\n/g, ' ') || 'GFXSHIFT', 0, 0)
       maskCtx.restore()
     }
     maskCtx.globalCompositeOperation = 'source-in'
-    if (layer.colorMode === 'seed') {
-      maskCtx.drawImage(this.source(size, layer.id), 0, 0)
-    } else if (layer.colorMode === 'solid') {
+    if (layer.colorMode === 'seed') maskCtx.drawImage(this.source(size, layer.id), 0, 0)
+    else if (layer.colorMode === 'solid') {
       maskCtx.fillStyle = layer.color
       maskCtx.fillRect(0, 0, size.width, size.height)
     } else {
@@ -737,7 +928,7 @@ export class LabEngine {
       maskCtx.fillStyle = gradient
       maskCtx.fillRect(0, 0, size.width, size.height)
     }
-    ctx.fillStyle = '#111311'
+    ctx.fillStyle = layer.secondaryColor ?? '#111311'
     ctx.fillRect(0, 0, size.width, size.height)
     const shift = layer.params.rgbShift
     ctx.save()
@@ -797,7 +988,39 @@ export class LabEngine {
     const turnedCells = (layer.params.turnedCells ?? 0) / 100
     const seed = Math.round(layer.params.seed ?? 7) * 97
 
-    for (let row = 0; row < totalRows; row += 1) {
+    if (layer.splitPaths?.length) {
+      layer.splitPaths.forEach((path, pathIndex) => {
+        for (let pointIndex = 1; pointIndex < path.length; pointIndex += 1) {
+          const a = path[pointIndex - 1]
+          const b = path[pointIndex]
+          const ax = a.x * size.width
+          const ay = a.y * size.height
+          const bx = b.x * size.width
+          const by = b.y * size.height
+          const length = Math.hypot(bx - ax, by - ay)
+          const pathAngle = Math.atan2(by - ay, bx - ax)
+          const steps = Math.max(1, Math.ceil(length / Math.max(4, cell * 0.7)))
+          for (let step = 0; step <= steps; step += 1) {
+            const progress = step / steps
+            const cx = ax + (bx - ax) * progress
+            const cy = ay + (by - ay) * progress
+            const shift = (pathIndex % 2 ? 1 : -1) * cell * layer.params.intensity / 50
+            sliceCtx.save()
+            sliceCtx.translate(cx, cy)
+            sliceCtx.rotate(pathAngle)
+            sliceCtx.rect(-cell, -cell * 0.6, cell * 2, cell * 1.2)
+            sliceCtx.clip()
+            sliceCtx.rotate(-pathAngle)
+            sliceCtx.translate(-cx - Math.sin(pathAngle) * shift, -cy + Math.cos(pathAngle) * shift)
+            sliceCtx.translate(originX, originY)
+            sliceCtx.scale(scaleX, scaleY)
+            sliceCtx.fillText(text, left, ascent)
+            sliceCtx.restore()
+          }
+        }
+      })
+    }
+    if (!layer.splitPaths?.length) for (let row = 0; row < totalRows; row += 1) {
       for (let column = 0; column < totalColumns; column += 1) {
         const index = row * totalColumns + column
         const cx = centerX + (column - (totalColumns - 1) / 2) * cell

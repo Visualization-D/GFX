@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, Dices, Grid3X3, MousePointer2, RotateCcw, ScanLine, Shapes, X } from 'lucide-react'
+import { ChevronDown, Dices, Grid3X3, MousePointer2, PenTool, RotateCcw, ScanLine, Shapes, Upload, X } from 'lucide-react'
 import type { CanvasSize, LabLayer } from '../../types/lab'
 import { DEFAULT_PARAMS, EFFECTS, makeLayer } from '../../types/lab'
 import { FALLBACK_FONTS } from '../../engine/fonts'
@@ -11,13 +11,15 @@ type ContextPanelProps = {
   fonts: string[]
   scanningFonts: boolean
   converting: boolean
+  shapeAssetCount: number
+  onUploadShapes: (files: FileList) => void
   onPatch: (patch: Partial<LabLayer>) => void
   onScanFonts: () => void
   onConvert: () => void
   onRandomize: () => void
 }
 
-export function ContextPanel({ layer, size, fonts, scanningFonts, converting, onPatch, onScanFonts, onConvert, onRandomize }: ContextPanelProps) {
+export function ContextPanel({ layer, size, fonts, scanningFonts, converting, shapeAssetCount, onUploadShapes, onPatch, onScanFonts, onConvert, onRandomize }: ContextPanelProps) {
   const [collapsed, setCollapsed] = useState(() => window.matchMedia('(max-width: 680px)').matches)
   const definition = EFFECTS.find((effect) => effect.id === layer.effect) ?? EFFECTS[0]
   const availableFonts = [...new Set([...fonts, ...FALLBACK_FONTS])].sort((a, b) => a.localeCompare(b))
@@ -36,6 +38,7 @@ export function ContextPanel({ layer, size, fonts, scanningFonts, converting, on
       secondaryColor: fresh.secondaryColor,
       colorMode: fresh.colorMode,
       shapeStyle: fresh.shapeStyle,
+      shapeText: fresh.shapeText,
     } : { params: fresh.params })
   }
 
@@ -72,15 +75,34 @@ export function ContextPanel({ layer, size, fonts, scanningFonts, converting, on
                   <RangeControl definition={{ key: 'y', label: 'Vertical position', min: 0, max: 100, step: 1, unit: '%' }} value={Math.round(layer.y * 100)} onChange={(value) => onPatch({ y: value / 100 })} />
                 </>
               )}
-              {layer.effect === 'shapes' && (
-                <label className="field-label">Shape family
+              {layer.effect === 'sliced' && (
+                <div className="mesh-editor-controls">
+                  <button className={`${layer.splitEditing ? 'primary-action' : 'secondary-action'} full-width`} onClick={() => onPatch({ splitEditing: !layer.splitEditing })}><PenTool size={14} /> {layer.splitEditing ? 'Finish split vectors' : 'Draw custom split vectors'}</button>
+                  {layer.splitPaths.length > 0 && <button className="text-action mesh-reset" onClick={() => onPatch({ splitPaths: [] })}><RotateCcw size={13} /> Clear {layer.splitPaths.length} custom paths</button>}
+                  {layer.splitEditing && <p className="mesh-hint"><MousePointer2 size={13} /> Drag across the text to draw one or more split lines. Guides are not exported.</p>}
+                </div>
+              )}
+              {['shapes', 'flow', 'displace'].includes(layer.effect) && (
+                <label className="field-label">{layer.effect === 'displace' ? 'Displacement pattern' : layer.effect === 'flow' ? 'Vector object' : 'Shape family'}
                   <select value={layer.shapeStyle} onChange={(event) => onPatch({ shapeStyle: event.target.value as LabLayer['shapeStyle'] })}>
-                    <option value="mixed">Mixed geometric forms</option>
-                    <option value="round">Circles, arcs, and rings</option>
-                    <option value="angular">Polygons and crosses</option>
-                    <option value="linear">Bars, crosses, and flowing lines</option>
+                    {layer.effect === 'shapes' && <><option value="mixed">Mixed geometric forms</option><option value="round">Circles, arcs, and rings</option><option value="angular">Polygons and crosses</option></>}
+                    <option value="linear">{layer.effect === 'displace' ? 'Generated bands' : 'Bars, crosses, and flowing lines'}</option>
+                    {layer.effect === 'displace' && <option value="angular">Generated circles and diamonds</option>}
+                    {layer.effect !== 'displace' && <option value="text">Random Arabic and English text</option>}
+                    <option value="custom">{layer.effect === 'displace' ? 'Imported shape masks' : 'Uploaded PNG or SVG objects'}</option>
                   </select>
                 </label>
+              )}
+              {['shapes', 'flow'].includes(layer.effect) && layer.shapeStyle === 'text' && (
+                <label className="field-label">Text objects · one item per line
+                  <textarea rows={3} value={layer.shapeText} onChange={(event) => onPatch({ shapeText: event.target.value })} placeholder="GFX\nSHIFT\nإبداع\nتحول" />
+                </label>
+              )}
+              {['shapes', 'flow', 'displace'].includes(layer.effect) && layer.shapeStyle === 'custom' && (
+                <div className="asset-upload-control">
+                  <label className="secondary-action full-width"><Upload size={14} /> {shapeAssetCount ? `${shapeAssetCount} of 10 objects loaded` : 'Upload up to 10 PNG or SVG objects'}<input type="file" accept="image/png,image/svg+xml" multiple hidden onChange={(event) => { if (event.target.files?.length) onUploadShapes(event.target.files); event.target.value = '' }} /></label>
+                  <p className="microcopy">Original colors and transparency are retained. Assets stay in this browser session.</p>
+                </div>
               )}
               <p className="context-description">{definition.description}</p>
               <div className="context-actions">
@@ -98,7 +120,19 @@ export function ContextPanel({ layer, size, fonts, scanningFonts, converting, on
                 </select>
               </label>
               {layer.colorMode === 'solid' && <label className="color-field"><span>{layer.effect === 'sketch' ? 'Ink color' : layer.effect === 'shapes' ? 'Shape color' : 'System tint'}</span><input type="color" value={layer.color} onChange={(event) => onPatch({ color: event.target.value })} /><output>{layer.color.toUpperCase()}</output></label>}
-              {((layer.effect === 'sketch' && layer.colorMode !== 'palette') || layer.effect === 'sliced' || layer.effect === 'shapes') && <label className="color-field"><span>{layer.effect === 'sliced' || layer.effect === 'shapes' ? 'Background' : 'Paper color'}</span><input type="color" value={layer.secondaryColor} onChange={(event) => onPatch({ secondaryColor: event.target.value })} /><output>{layer.secondaryColor.toUpperCase()}</output></label>}
+              {((layer.effect === 'sketch' && layer.colorMode !== 'palette') || ['sliced', 'shapes', 'flow', 'spray', 'kinetic'].includes(layer.effect)) && <label className="color-field"><span>{layer.effect === 'sketch' ? 'Paper color' : 'Background'}</span><input type="color" value={layer.secondaryColor} onChange={(event) => onPatch({ secondaryColor: event.target.value })} /><output>{layer.secondaryColor.toUpperCase()}</output></label>}
+              {layer.effect === 'displace' && (
+                <div className="mesh-editor-controls">
+                  <span className="field-label">Effect area</span>
+                  <div className="three-column-controls">
+                    <button className={!layer.selectionEditing && !layer.selection ? 'primary-action' : 'secondary-action'} onClick={() => onPatch({ selection: undefined, selectionEditing: undefined })}>Full</button>
+                    <button className={layer.selectionEditing === 'marquee' ? 'primary-action' : 'secondary-action'} onClick={() => onPatch({ selectionEditing: 'marquee' })}>Marquee</button>
+                    <button className={layer.selectionEditing === 'free' ? 'primary-action' : 'secondary-action'} onClick={() => onPatch({ selectionEditing: 'free' })}>Free path</button>
+                  </div>
+                  {layer.selection && <button className="text-action mesh-reset" onClick={() => onPatch({ selection: undefined, selectionEditing: undefined })}>Clear selection · use full canvas</button>}
+                  {layer.selectionEditing && <p className="mesh-hint"><MousePointer2 size={13} /> Drag on the canvas. RGB movement applies only inside the resulting area.</p>}
+                </div>
+              )}
               {layer.effect === 'triangulate' && (
                 <div className="mesh-editor-controls">
                   <button className={`${layer.meshEditing ? 'primary-action' : 'secondary-action'} full-width`} onClick={() => onPatch({ meshEditing: !layer.meshEditing })}><Grid3X3 size={14} /> {layer.meshEditing ? 'Finish mesh editing' : 'Edit geometric mesh'}</button>
@@ -138,6 +172,16 @@ export function ContextPanel({ layer, size, fonts, scanningFonts, converting, on
               <p className="microcopy">{layer.shapes ? `${layer.shapes.length} vector commands · ${size.width} × ${size.height}` : 'Drag the text directly on the canvas. Shape conversion preserves the selected font’s vector contours.'}</p>
             </>
           )}
+          <div className="mask-controls">
+            <span className="field-label">Alpha and layer mask</span>
+            <button className={`${layer.maskEditing ? 'primary-action' : 'secondary-action'} full-width`} onClick={() => onPatch({ maskEditing: !layer.maskEditing })}><PenTool size={14} /> {layer.maskEditing ? 'Finish mask painting' : layer.maskStrokes.length ? 'Edit painted layer mask' : 'Add painted layer mask'}</button>
+            {layer.maskEditing && <>
+              <RangeControl definition={{ key: 'maskBrush', label: 'Mask brush', min: 4, max: 240, step: 1, unit: 'px' }} value={layer.maskBrush} onChange={(value) => onPatch({ maskBrush: value })} />
+              <label className="check-label"><input type="checkbox" checked={!layer.maskErase} onChange={(event) => onPatch({ maskErase: !event.target.checked })} /> Restore hidden areas (uncheck to erase)</label>
+              <p className="microcopy">Paint to hide or restore this layer. Layer alpha remains available in the Layers panel.</p>
+            </>}
+            {layer.maskStrokes.length > 0 && <button className="text-action mesh-reset" onClick={() => onPatch({ maskStrokes: [], maskEditing: false })}><RotateCcw size={13} /> Remove mask · {layer.maskStrokes.length} strokes</button>}
+          </div>
         </div>
       )}
     </section>

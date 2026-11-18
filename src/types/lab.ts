@@ -8,10 +8,15 @@ export type EffectType =
   | 'triangulate'
   | 'kinetic'
   | 'sliced'
+  | 'image'
 
 export type LayerKind = 'effect' | 'text'
 export type ColorMode = 'seed' | 'palette' | 'solid'
-export type ShapeStyle = 'mixed' | 'round' | 'angular' | 'linear'
+export type ShapeStyle = 'mixed' | 'round' | 'angular' | 'linear' | 'text' | 'custom'
+export type LayerGroup = { id: string; name: string; visible: boolean; collapsed: boolean }
+export type PaletteGroup = { id: string; name: string; colors: string[] }
+export type CanvasSelection = { type: 'marquee' | 'free'; points: MeshPoint[] }
+export type MaskStroke = { points: MeshPoint[]; size: number; erase: boolean }
 export type MeshPoint = { x: number; y: number }
 export type BlendMode = 'source-over' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'color-dodge' | 'difference' | 'exclusion' | 'hue' | 'saturation' | 'color' | 'luminosity'
 
@@ -38,6 +43,9 @@ export type LabLayer = {
   seedName: string
   colorMode: ColorMode
   shapeStyle: ShapeStyle
+  shapeText: string
+  shapeAssetNames: string[]
+  groupId?: string
   params: Record<string, number>
   text: string
   font: string
@@ -54,6 +62,14 @@ export type LabLayer = {
   shapes?: PathCommand[]
   meshPoints?: MeshPoint[]
   meshEditing?: boolean
+  splitPaths: MeshPoint[][]
+  splitEditing?: boolean
+  selection?: CanvasSelection
+  selectionEditing?: 'marquee' | 'free'
+  maskStrokes: MaskStroke[]
+  maskEditing?: boolean
+  maskBrush: number
+  maskErase: boolean
 }
 
 export type CanvasSize = { width: number; height: number }
@@ -95,6 +111,10 @@ export const EFFECTS: EffectDefinition[] = [
     ],
   },
   {
+    id: 'image', name: 'Image layer', short: 'IM', description: 'A direct full-canvas image layer for pasted screenshots, clipboard images, and uploaded artwork.',
+    params: [],
+  },
+  {
     id: 'liquid', name: 'Liquid grid', short: 'LG', description: 'A pointer-reactive image mesh with traveling waves.',
     params: [
       { key: 'density', label: 'Grid density', min: 5, max: 32, step: 1 },
@@ -108,7 +128,9 @@ export const EFFECTS: EffectDefinition[] = [
     id: 'flow', name: 'Vector flow', short: 'VF', description: 'Image luminance steers a field of responsive vectors.',
     params: [
       { key: 'density', label: 'Field density', min: 8, max: 55, step: 1 },
-      { key: 'intensity', label: 'Vector length', min: 4, max: 90, step: 1, unit: 'px' },
+      { key: 'intensity', label: 'Vector length', min: 4, max: 180, step: 1, unit: 'px' },
+      { key: 'lineWeight', label: 'Vector width', min: 0.5, max: 24, step: 0.5, unit: 'px' },
+      { key: 'fluidity', label: 'Vector curvature', min: 0, max: 100, step: 1, unit: '%' },
       { key: 'depth', label: 'Luminance depth', min: 0, max: 100, step: 1 },
       { key: 'speed', label: 'Drift speed', min: 0, max: 2, step: 0.01 },
       { key: 'vector', label: 'Bias angle', min: 0, max: 360, step: 1, unit: '°' },
@@ -130,7 +152,12 @@ export const EFFECTS: EffectDefinition[] = [
     id: 'displace', name: 'RGB displacement', short: 'RD', description: 'Band displacement and chromatic channel separation.',
     params: [
       { key: 'intensity', label: 'Displacement', min: 0, max: 160, step: 1, unit: 'px' },
-      { key: 'rgbShift', label: 'RGB shift', min: 0, max: 80, step: 1, unit: 'px' },
+      { key: 'rgbShift', label: 'Master RGB shift', min: 0, max: 120, step: 1, unit: 'px' },
+      { key: 'redX', label: 'Red channel X', min: -120, max: 120, step: 1, unit: 'px' },
+      { key: 'redY', label: 'Red channel Y', min: -120, max: 120, step: 1, unit: 'px' },
+      { key: 'blueX', label: 'Cyan channel X', min: -120, max: 120, step: 1, unit: 'px' },
+      { key: 'blueY', label: 'Cyan channel Y', min: -120, max: 120, step: 1, unit: 'px' },
+      { key: 'depth', label: 'Pattern shape size', min: 12, max: 240, step: 1, unit: 'px' },
       { key: 'density', label: 'Band size', min: 2, max: 60, step: 1, unit: 'px' },
       { key: 'speed', label: 'Signal speed', min: 0, max: 2, step: 0.01 },
       { key: 'latency', label: 'Pointer latency', min: 0, max: 0.95, step: 0.01 },
@@ -139,9 +166,9 @@ export const EFFECTS: EffectDefinition[] = [
   {
     id: 'spray', name: 'Spray explosion', short: 'SP', description: 'Thousands of image-colored particles with pointer force.',
     params: [
-      { key: 'density', label: 'Particle count', min: 200, max: 5000, step: 100 },
+      { key: 'density', label: 'Grain count', min: 200, max: 10000, step: 100 },
       { key: 'intensity', label: 'Explosion force', min: 0, max: 100, step: 1 },
-      { key: 'depth', label: 'Particle size', min: 1, max: 18, step: 0.5, unit: 'px' },
+      { key: 'depth', label: 'Grain size', min: 1, max: 18, step: 0.5, unit: 'px' },
       { key: 'speed', label: 'Motion speed', min: 0, max: 2, step: 0.01 },
       { key: 'latency', label: 'Pointer latency', min: 0, max: 0.95, step: 0.01 },
     ],
@@ -160,9 +187,12 @@ export const EFFECTS: EffectDefinition[] = [
     id: 'kinetic', name: 'Kinetic type', short: 'KT', description: 'A rhythmic typographic mask fed by the seed image.',
     params: [
       { key: 'density', label: 'Repetitions', min: 2, max: 18, step: 1 },
-      { key: 'intensity', label: 'Wave scale', min: 0, max: 100, step: 1 },
-      { key: 'depth', label: 'Type size', min: 30, max: 240, step: 1, unit: 'px' },
-      { key: 'speed', label: 'Motion speed', min: 0, max: 2, step: 0.01 },
+      { key: 'intensity', label: 'Wave scale', min: 0, max: 180, step: 1 },
+      { key: 'depth', label: 'Type size', min: 30, max: 300, step: 1, unit: 'px' },
+      { key: 'speed', label: 'Motion speed', min: 0, max: 3, step: 0.01 },
+      { key: 'elasticity', label: 'Elasticity', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'jitter', label: 'Row scatter', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'vector', label: 'Twist', min: -90, max: 90, step: 1, unit: '°' },
       { key: 'rgbShift', label: 'Echo shift', min: 0, max: 60, step: 1, unit: 'px' },
     ],
   },
@@ -199,11 +229,19 @@ export const DEFAULT_PARAMS: Record<string, number> = {
   scaleY: 100,
   turnedCells: 8,
   fluidity: 0,
+  elasticity: 68,
+  redX: 0,
+  redY: 0,
+  blueX: 0,
+  blueY: 0,
   seed: 7,
 }
 
 const EFFECT_PARAM_OVERRIDES: Partial<Record<EffectType, Record<string, number>>> = {
   liquid: { density: 18, intensity: 64, speed: 0.7, latency: 0.12 },
+  spray: { density: 2800, depth: 1, intensity: 38, speed: 0.45 },
+  flow: { lineWeight: 2, fluidity: 24, intensity: 56 },
+  kinetic: { density: 10, intensity: 72, depth: 150, speed: 1.15, elasticity: 72, jitter: 18, vector: 0 },
   shapes: { density: 7, rows: 10, intensity: 78, jitter: 22, depth: 38, vector: 0, threshold: 72, lineWeight: 3, fluidity: 0, speed: 0.12, seed: 21, latency: 0.18 },
   sliced: { density: 13, intensity: -50, jitter: 100, turnedCells: 90, seed: 652, depth: 96, scaleY: 27, threshold: 0, vector: 0, speed: 0, rgbShift: 0 },
 }
@@ -223,7 +261,13 @@ export function makeLayer(effect: EffectType = 'liquid', index = 1): LabLayer {
     kind: 'effect', effect, visible: true, opacity: 1, blend: 'source-over', color: isSliced ? '#e9e5da' : '#f44f05',
     secondaryColor: isSliced || isShapeField ? '#111311' : '#e9e5da', colorMode: isSliced ? 'solid' : isShapeField ? 'palette' : 'seed',
     seedName: 'Generative seed 001',
-    shapeStyle: 'mixed',
+    shapeStyle: effect === 'displace' || effect === 'flow' ? 'linear' : 'mixed',
+    shapeText: 'GFX\nSHIFT\nFORM\nTYPE\nإبداع\nتحول\nلون\nحرف',
+    shapeAssetNames: [],
+    splitPaths: [],
+    maskStrokes: [],
+    maskBrush: 72,
+    maskErase: true,
     params: { ...DEFAULT_PARAMS, ...EFFECT_PARAM_OVERRIDES[effect] }, text: isSliced ? 'SHAPES' : effect === 'kinetic' ? 'GFXSHIFT' : 'GFX\nSHIFT', font: isSliced ? 'Inter' : 'Arial', fontSize: 150, scale: 1,
     fontWeight: isSliced ? 800 : 700, letterSpacing: -4, x: 0.5, y: 0.5, outline: false, rotation: 0,
     lineHeight: 0.86, align: 'center',
