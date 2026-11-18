@@ -25,7 +25,7 @@ export function ContextPanel({ layer, size, fonts, scanningFonts, converting, sh
   const availableFonts = [...new Set([...fonts, ...FALLBACK_FONTS])].sort((a, b) => a.localeCompare(b))
   const resetEffect = () => {
     const fresh = makeLayer(layer.effect)
-    onPatch(layer.effect === 'sliced' || layer.effect === 'shapes' ? {
+    onPatch(['sliced', 'shapes', 'masked'].includes(layer.effect) ? {
       params: fresh.params,
       text: fresh.text,
       font: fresh.font,
@@ -52,7 +52,7 @@ export function ContextPanel({ layer, size, fonts, scanningFonts, converting, sh
         <div className="context-body">
           {layer.kind === 'effect' ? (
             <>
-              {(layer.effect === 'kinetic' || layer.effect === 'sliced') && (
+              {['kinetic', 'sliced', 'masked'].includes(layer.effect) && (
                 <div className="effect-text-controls">
                   <label className="field-label">Custom effect text
                     <input type="text" maxLength={40} value={layer.text} onChange={(event) => onPatch({ text: event.target.value })} placeholder="Enter your word" />
@@ -120,7 +120,7 @@ export function ContextPanel({ layer, size, fonts, scanningFonts, converting, sh
                 </select>
               </label>
               {layer.colorMode === 'solid' && <label className="color-field"><span>{layer.effect === 'sketch' ? 'Ink color' : layer.effect === 'shapes' ? 'Shape color' : 'System tint'}</span><input type="color" value={layer.color} onChange={(event) => onPatch({ color: event.target.value })} /><output>{layer.color.toUpperCase()}</output></label>}
-              {((layer.effect === 'sketch' && layer.colorMode !== 'palette') || ['sliced', 'shapes', 'flow', 'spray', 'kinetic'].includes(layer.effect)) && <label className="color-field"><span>{layer.effect === 'sketch' ? 'Paper color' : 'Background'}</span><input type="color" value={layer.secondaryColor} onChange={(event) => onPatch({ secondaryColor: event.target.value })} /><output>{layer.secondaryColor.toUpperCase()}</output></label>}
+              {((layer.effect === 'sketch' && layer.colorMode !== 'palette') || ['sliced', 'shapes', 'flow', 'spray', 'kinetic', 'masked', 'receding'].includes(layer.effect)) && <label className="color-field"><span>{layer.effect === 'sketch' ? 'Paper color' : 'Background'}</span><input type="color" value={layer.secondaryColor} onChange={(event) => onPatch({ secondaryColor: event.target.value })} /><output>{layer.secondaryColor.toUpperCase()}</output></label>}
               {layer.effect === 'displace' && (
                 <div className="mesh-editor-controls">
                   <span className="field-label">Effect area</span>

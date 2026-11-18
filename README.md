@@ -20,13 +20,15 @@ npm run preview
 
 ## Included
 
-- Nine generative canvas systems—Shape Field, Liquid Grid, Vector Flow, Sketchy Lines, RGB Displacement, Spray Explosion, Triangulator, Kinetic Type, and Sliced Word—plus direct Image layers for pasted or uploaded artwork.
+- Eleven generative canvas systems—Shape Field, Masked Letter Grid, Receding Cells, Liquid Grid, Vector Flow, Sketchy Lines, RGB Displacement, Spray Explosion, Triangulator, Kinetic Type, and Sliced Word—plus direct Image layers for pasted or uploaded artwork.
 - Fresh projects open with a customizable vector Shape Field on an A4 Portrait canvas (1240 × 1754). Shape families, rows, columns, size, jitter, aspect, rotation, fill, line width, animated line fluidity, motion, color, and geometry seed are editable; Randomize regenerates every shape.
 - Shape Field supports mixed, round, angular, and linear families, random Arabic and English text objects, and up to ten uploaded PNG or SVG objects per layer. A text-entry area appears whenever text objects are selected.
 - Vector Flow provides independent vector length, width, curvature, luminance depth, drift, and bias controls. Lines can be replaced by custom text tokens or uploaded PNG/SVG icons.
-- Custom text and font selection for Kinetic Type and Sliced Word. Sliced Word draws vector-scaled glyphs at the final output resolution, with independent horizontal/vertical expansion, 10–400% text scaling, direct dragging, position controls, row shifts, deterministic cell jitter, quarter-turned cells, variation seeds, tracking, gaps, direction, drift, and chromatic echoes.
+- Custom text and font selection for Kinetic Type, Sliced Word, and Masked Letter Grid. Sliced Word draws vector-scaled glyphs at the final output resolution, with independent horizontal/vertical expansion, 10–400% text scaling, direct dragging, position controls, row shifts, deterministic cell jitter, quarter-turned cells, variation seeds, tracking, gaps, direction, drift, and chromatic echoes.
 - Sliced Word also accepts user-drawn split vectors. Drag one or more paths directly across the canvas to orient clipping windows and control how the word separates; guides remain outside exports.
 - Kinetic Type uses faster multi-frequency motion, spring elasticity, row scatter, twist, horizontal stretch, vertical pulse, and pointer-follow or mouse-drag force.
+- Masked Letter Grid draws coherent, canvas-scale custom glyphs and reveals them through seeded clipping windows. Grid dimension, cell aspect, glyph zoom, rotation, shift, block size, occupancy, drift, colors, and pointer force are adjustable.
+- Receding Cells builds shared row-progress curves with normalized row heights, progressive subdivision, hard-edge recession, seeded cell widths, gaps, palette fades, and optional stripes. Direction, curve bending, width/length/position curves, motion, colors, and pointer deformation are editable.
 - Liquid Grid uses a clean high-contrast default seed, independent uploaded images, traveling waves, hover-following deformation, and stronger press-and-drag swirl interaction.
 - Spray Explosion starts with one-pixel image-colored grains. Grain count, grain size, explosion force, motion, and pointer latency remain adjustable.
 - RGB Displacement supports generated bands, circles, diamonds, and imported PNG/SVG shape masks. Red and cyan channels have independent X/Y controls, and the effect can cover the full canvas, a marquee, or a free-drawn closed path.

@@ -442,13 +442,17 @@ export default function App() {
       const backgroundCtx = backgroundCanvas.getContext('2d')!
       backgroundCtx.fillStyle = background
       backgroundCtx.fillRect(0, 0, size.width, size.height)
-      const renderPsdLayer = (layer: LabLayer): PsdLayer => ({
-        name: layer.name,
-        canvas: engine.renderLayer(layer, size, palette),
-        hidden: !layer.visible,
-        opacity: layer.opacity,
-        blendMode: PSD_BLEND_MODES[layer.blend],
-      })
+      const renderPsdLayer = (layer: LabLayer): PsdLayer => {
+        const mask = engine.renderLayerMask(layer, size)
+        return {
+          name: layer.name,
+          canvas: engine.renderLayer(layer, size, palette, false),
+          hidden: !layer.visible,
+          opacity: layer.opacity,
+          blendMode: PSD_BLEND_MODES[layer.blend],
+          ...(mask ? { mask: { canvas: mask, top: 0, left: 0, bottom: size.height, right: size.width, defaultColor: 255 } } : {}),
+        }
+      }
       const children: PsdLayer[] = []
       const renderedGroups = new Set<string>()
       layers.forEach((layer) => {

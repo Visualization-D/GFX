@@ -8,6 +8,8 @@ export type EffectType =
   | 'triangulate'
   | 'kinetic'
   | 'sliced'
+  | 'masked'
+  | 'receding'
   | 'image'
 
 export type LayerKind = 'effect' | 'text'
@@ -108,6 +110,38 @@ export const EFFECTS: EffectDefinition[] = [
       { key: 'speed', label: 'Motion speed', min: 0, max: 2, step: 0.01 },
       { key: 'seed', label: 'Geometry seed', min: 0, max: 999, step: 1 },
       { key: 'latency', label: 'Pointer latency', min: 0, max: 0.95, step: 0.01 },
+    ],
+  },
+  {
+    id: 'masked', name: 'Masked letter grid', short: 'MG', description: 'Oversized glyph fragments emerge through a seeded grid of clipped cells.',
+    params: [
+      { key: 'density', label: 'Grid dimension', min: 6, max: 48, step: 1 },
+      { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1 },
+      { key: 'depth', label: 'Cell aspect', min: 40, max: 200, step: 1, unit: '%' },
+      { key: 'scaleY', label: 'Glyph zoom', min: 30, max: 250, step: 1, unit: '%' },
+      { key: 'vector', label: 'Rotation', min: 0, max: 90, step: 1, unit: '°' },
+      { key: 'intensity', label: 'Shift', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'threshold', label: 'Block size', min: 20, max: 120, step: 1, unit: '%' },
+      { key: 'jitter', label: 'Cell occupancy', min: 5, max: 100, step: 1, unit: '%' },
+      { key: 'speed', label: 'Drift speed', min: 0, max: 2, step: 0.01 },
+    ],
+  },
+  {
+    id: 'receding', name: 'Receding cells', short: 'RC', description: 'Rows subdivide along a shared perspective curve, with hard edges, gaps, fades, and stripes.',
+    params: [
+      { key: 'density', label: 'Rows', min: 4, max: 48, step: 1 },
+      { key: 'vector', label: 'Direction', min: -180, max: 180, step: 1, unit: '°' },
+      { key: 'fluidity', label: 'Curve bend', min: -100, max: 100, step: 1 },
+      { key: 'depth', label: 'Curve strength', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'scaleY', label: 'Width curve', min: 0.2, max: 3, step: 0.05 },
+      { key: 'intensity', label: 'Cell length', min: 5, max: 100, step: 1, unit: '%' },
+      { key: 'elasticity', label: 'Length curve', min: 0.2, max: 3, step: 0.05 },
+      { key: 'jitter', label: 'Position curve', min: 0.2, max: 3, step: 0.05 },
+      { key: 'threshold', label: 'Gap', min: 0, max: 40, step: 0.5, unit: '%' },
+      { key: 'rgbShift', label: 'Gradient fade', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'lineWeight', label: 'Stripes', min: 0, max: 24, step: 1 },
+      { key: 'seed', label: 'Seed', min: 0, max: 999, step: 1 },
+      { key: 'speed', label: 'Motion speed', min: 0, max: 2, step: 0.01 },
     ],
   },
   {
@@ -244,6 +278,8 @@ const EFFECT_PARAM_OVERRIDES: Partial<Record<EffectType, Record<string, number>>
   kinetic: { density: 10, intensity: 72, depth: 150, speed: 1.15, elasticity: 72, jitter: 18, vector: 0 },
   shapes: { density: 7, rows: 10, intensity: 78, jitter: 22, depth: 38, vector: 0, threshold: 72, lineWeight: 3, fluidity: 0, speed: 0.12, seed: 21, latency: 0.18 },
   sliced: { density: 13, intensity: -50, jitter: 100, turnedCells: 90, seed: 652, depth: 96, scaleY: 27, threshold: 0, vector: 0, speed: 0, rgbShift: 0 },
+  masked: { density: 27, seed: 100, depth: 100, scaleY: 100, vector: 20, intensity: 15, threshold: 70, jitter: 100, speed: 0.05 },
+  receding: { density: 17, vector: 0, fluidity: 0, depth: 35, scaleY: 1, intensity: 62, elasticity: 1, jitter: 1, threshold: 4, rgbShift: 100, lineWeight: 0, seed: 317, speed: 0.08 },
 }
 
 export const BLEND_MODES: BlendMode[] = [
@@ -255,11 +291,13 @@ export function makeLayer(effect: EffectType = 'liquid', index = 1): LabLayer {
   const definition = EFFECTS.find((item) => item.id === effect) ?? EFFECTS[0]
   const isSliced = effect === 'sliced'
   const isShapeField = effect === 'shapes'
+  const isMasked = effect === 'masked'
+  const isReceding = effect === 'receding'
   return {
     id: crypto.randomUUID(),
     name: `${definition.name} ${String(index).padStart(2, '0')}`,
-    kind: 'effect', effect, visible: true, opacity: 1, blend: 'source-over', color: isSliced ? '#e9e5da' : '#f44f05',
-    secondaryColor: isSliced || isShapeField ? '#111311' : '#e9e5da', colorMode: isSliced ? 'solid' : isShapeField ? 'palette' : 'seed',
+    kind: 'effect', effect, visible: true, opacity: 1, blend: 'source-over', color: isSliced || isMasked ? '#e9e5da' : '#f44f05',
+    secondaryColor: isSliced || isShapeField || isMasked || isReceding ? '#111311' : '#e9e5da', colorMode: isSliced || isMasked ? 'solid' : isShapeField || isReceding ? 'palette' : 'seed',
     seedName: 'Generative seed 001',
     shapeStyle: effect === 'displace' || effect === 'flow' ? 'linear' : 'mixed',
     shapeText: 'GFX\nSHIFT\nFORM\nTYPE\nإبداع\nتحول\nلون\nحرف',
@@ -268,8 +306,8 @@ export function makeLayer(effect: EffectType = 'liquid', index = 1): LabLayer {
     maskStrokes: [],
     maskBrush: 72,
     maskErase: true,
-    params: { ...DEFAULT_PARAMS, ...EFFECT_PARAM_OVERRIDES[effect] }, text: isSliced ? 'SHAPES' : effect === 'kinetic' ? 'GFXSHIFT' : 'GFX\nSHIFT', font: isSliced ? 'Inter' : 'Arial', fontSize: 150, scale: 1,
-    fontWeight: isSliced ? 800 : 700, letterSpacing: -4, x: 0.5, y: 0.5, outline: false, rotation: 0,
+    params: { ...DEFAULT_PARAMS, ...EFFECT_PARAM_OVERRIDES[effect] }, text: isSliced ? 'SHAPES' : isMasked ? 'SHARP' : effect === 'kinetic' ? 'GFXSHIFT' : 'GFX\nSHIFT', font: isSliced || isMasked ? 'Inter' : 'Arial', fontSize: 150, scale: 1,
+    fontWeight: isSliced || isMasked ? 800 : 700, letterSpacing: -4, x: 0.5, y: 0.5, outline: false, rotation: 0,
     lineHeight: 0.86, align: 'center',
   }
 }

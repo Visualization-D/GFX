@@ -300,19 +300,30 @@ export class LabEngine {
     }
   }
 
-  renderLayer(layer: LabLayer, size: CanvasSize, palette: string[]) {
+  renderLayer(layer: LabLayer, size: CanvasSize, palette: string[], includeMask = true) {
     this.palette = palette.length ? palette : this.palette
     const canvas = makeCanvas(size.width, size.height)
     const ctx = canvas.getContext('2d')!
     const pointer = this.pointers.get(layer.id) ?? { x: 0.5, y: 0.5, active: false, hover: false }
     if (layer.kind === 'text') this.renderText(ctx, layer, size)
     else this.renderEffect(ctx, canvas, layer, size, this.lastTime, pointer)
-    this.applyLayerMask(ctx, layer, size)
+    if (includeMask) this.applyLayerMask(ctx, layer, size)
     return canvas
   }
 
-  private applyLayerMask(ctx: CanvasRenderingContext2D, layer: LabLayer, size: CanvasSize) {
-    if (!layer.maskStrokes?.length) return
+  renderLayerMask(layer: LabLayer, size: CanvasSize) {
+    const alphaMask = this.createLayerMask(layer, size)
+    if (!alphaMask) return null
+    const mask = makeCanvas(size.width, size.height)
+    const ctx = mask.getContext('2d')!
+    ctx.fillStyle = '#000000'
+    ctx.fillRect(0, 0, size.width, size.height)
+    ctx.drawImage(alphaMask, 0, 0)
+    return mask
+  }
+
+  private createLayerMask(layer: LabLayer, size: CanvasSize) {
+    if (!layer.maskStrokes?.length) return null
     const mask = makeCanvas(size.width, size.height)
     const maskCtx = mask.getContext('2d')!
     maskCtx.fillStyle = '#ffffff'
@@ -320,8 +331,9 @@ export class LabEngine {
     maskCtx.lineCap = 'round'
     maskCtx.lineJoin = 'round'
     for (const stroke of layer.maskStrokes) {
-      maskCtx.strokeStyle = stroke.erase ? '#000000' : '#ffffff'
-      maskCtx.fillStyle = stroke.erase ? '#000000' : '#ffffff'
+      maskCtx.globalCompositeOperation = stroke.erase ? 'destination-out' : 'source-over'
+      maskCtx.strokeStyle = '#ffffff'
+      maskCtx.fillStyle = '#ffffff'
       maskCtx.lineWidth = Math.max(1, stroke.size)
       maskCtx.beginPath()
       stroke.points.forEach((point, index) => {
@@ -335,6 +347,12 @@ export class LabEngine {
         maskCtx.fill()
       } else maskCtx.stroke()
     }
+    return mask
+  }
+
+  private applyLayerMask(ctx: CanvasRenderingContext2D, layer: LabLayer, size: CanvasSize) {
+    const mask = this.createLayerMask(layer, size)
+    if (!mask) return
     ctx.save()
     ctx.globalCompositeOperation = 'destination-in'
     ctx.drawImage(mask, 0, 0)
@@ -360,6 +378,8 @@ export class LabEngine {
       case 'triangulate': return this.renderTriangulate(ctx, layer, size)
       case 'kinetic': return this.renderKinetic(ctx, canvas, layer, size, time, pointer)
       case 'sliced': return this.renderSliced(ctx, layer, size, time, pointer)
+      case 'masked': return this.renderMaskedLetterGrid(ctx, layer, size, time, pointer)
+      case 'receding': return this.renderRecedingCells(ctx, layer, size, time, pointer)
     }
   }
 
@@ -879,6 +899,161 @@ export class LabEngine {
         ctx.stroke()
       }
     }
+  }
+
+  private renderMaskedLetterGrid(ctx: CanvasRenderingContext2D, layer: LabLayer, size: CanvasSize, time: number, pointer: PointerState) {
+    ctx.fillStyle = layer.secondaryColor
+    ctx.fillRect(0, 0, size.width, size.height)
+    const letters = Array.from((layer.text || 'SHARP').replace(/\s+/g, ''))
+    if (!letters.length) letters.push('S')
+    const density = Math.max(6, Math.round(layer.params.density))
+    const cellWidth = size.width / density
+    const cellHeight = cellWidth * layer.params.depth / 100
+    const rows = Math.ceil(size.height / cellHeight)
+    const block = layer.params.threshold / 100
+    const occupancy = layer.params.jitter / 100
+    const zoom = layer.params.scaleY / 100
+    const rotationRange = layer.params.vector * Math.PI / 180
+    const shiftAmount = layer.params.intensity / 100
+    const seed = Math.round(layer.params.seed) * 1009
+    const sample = layer.colorMode === 'seed' ? this.sample(size, 260, layer.id) : null
+    const pixels = sample ? sample.getContext('2d')!.getImageData(0, 0, sample.width, sample.height).data : null
+    const forms = makeCanvas(size.width, size.height)
+    const formsCtx = forms.getContext('2d')!
+    formsCtx.textAlign = 'center'
+    formsCtx.textBaseline = 'middle'
+
+    letters.forEach((glyph, letterIndex) => {
+      const formSeed = seed + letterIndex * 271
+      const formX = size.width * (0.15 + random(formSeed + 1) * 0.7)
+      const rowCenter = (letterIndex + 0.5) / letters.length
+      const formY = size.height * (rowCenter + (random(formSeed + 2) - 0.5) * 0.16)
+      const dx = formX / size.width - pointer.x
+      const dy = formY / size.height - pointer.y
+      const proximity = pointer.hover ? Math.exp(-Math.sqrt(dx * dx + dy * dy) * 5) : 0
+      const drift = Math.sin(time * layer.params.speed + random(formSeed + 3) * TAU)
+      const shiftX = (random(formSeed + 4) - 0.5) * size.width * shiftAmount * 0.3 + dx * proximity * size.width * (pointer.active ? 0.16 : 0.045)
+      const shiftY = (random(formSeed + 5) - 0.5) * size.height * shiftAmount * 0.12 + dy * proximity * size.height * (pointer.active ? 0.1 : 0.025)
+      const glyphSize = size.width * (0.38 + Math.pow(random(formSeed + 6), 1.4) * 1.05) * zoom * (1 + proximity * (pointer.active ? 0.32 : 0.1))
+      const rotation = (random(formSeed + 7) - 0.5) * rotationRange * 2 + drift * 0.025 + proximity * (pointer.active ? 0.32 : 0.08)
+      let color = layer.color
+      if (layer.colorMode === 'palette') color = this.palette[letterIndex % this.palette.length]
+      else if (sample && pixels) {
+        const px = Math.max(0, Math.min(sample.width - 1, Math.floor(formX / size.width * sample.width)))
+        const py = Math.max(0, Math.min(sample.height - 1, Math.floor(formY / size.height * sample.height)))
+        const pixel = (py * sample.width + px) * 4
+        color = `rgb(${pixels[pixel]},${pixels[pixel + 1]},${pixels[pixel + 2]})`
+      }
+
+      formsCtx.save()
+      formsCtx.translate(formX + shiftX, formY + shiftY)
+      formsCtx.rotate(rotation)
+      formsCtx.font = `${layer.fontWeight} ${Math.max(8, glyphSize)}px "${layer.font}", sans-serif`
+      formsCtx.fillStyle = color
+      formsCtx.fillText(glyph, 0, 0)
+      formsCtx.restore()
+    })
+
+    for (let row = 0; row < rows; row += 1) {
+      for (let column = 0; column < density; column += 1) {
+        const cellSeed = seed + (row * density + column) * 41
+        if (random(cellSeed + 1) > occupancy) continue
+        const cx = (column + 0.5) * cellWidth
+        const cy = (row + 0.5) * cellHeight
+        const x = cx - cellWidth * block / 2
+        const y = cy - cellHeight * block / 2
+        const width = cellWidth * block
+        const height = cellHeight * block
+        ctx.drawImage(forms, x, y, width, height, x, y, width, height)
+      }
+    }
+  }
+
+  private renderRecedingCells(ctx: CanvasRenderingContext2D, layer: LabLayer, size: CanvasSize, time: number, pointer: PointerState) {
+    ctx.fillStyle = layer.secondaryColor
+    ctx.fillRect(0, 0, size.width, size.height)
+    const rows = Math.max(4, Math.round(layer.params.density))
+    const angle = layer.params.vector * Math.PI / 180
+    const cos = Math.abs(Math.cos(angle))
+    const sin = Math.abs(Math.sin(angle))
+    const fieldWidth = size.width * cos + size.height * sin
+    const fieldHeight = size.width * sin + size.height * cos
+    const strength = layer.params.depth / 100
+    const widthCurve = Math.max(0.2, layer.params.scaleY)
+    const lengthCurve = Math.max(0.2, layer.params.elasticity)
+    const positionCurve = Math.max(0.2, layer.params.jitter)
+    const curveBend = layer.params.fluidity / 100
+    const fade = layer.params.rgbShift / 100
+    const stripes = Math.round(layer.params.lineWeight)
+    const seed = Math.round(layer.params.seed) * 7919
+    const sample = layer.colorMode === 'seed' ? this.sample(size, 260, layer.id) : null
+    const pixels = sample ? sample.getContext('2d')!.getImageData(0, 0, sample.width, sample.height).data : null
+    const progress = Array.from({ length: rows }, (_, row) => {
+      const linear = row / Math.max(1, rows - 1)
+      const wave = Math.sin(time * layer.params.speed + row * 0.37) * 0.003
+      return clamp(linear + curveBend * Math.sin(linear * Math.PI) * 0.35 + wave)
+    })
+    const weights = progress.map((value) => Math.max(0.015, Math.pow(1 - value * 0.985, widthCurve * (0.7 + strength * 2))))
+    const weightTotal = weights.reduce((sum, value) => sum + value, 0)
+
+    ctx.save()
+    ctx.translate(size.width / 2, size.height / 2)
+    ctx.rotate(angle)
+    ctx.translate(-fieldWidth / 2, -fieldHeight / 2)
+    let rowY = 0
+    for (let row = 0; row < rows; row += 1) {
+      const u = progress[row]
+      const rowHeight = weights[row] / weightTotal * fieldHeight
+      const centerY = rowY + rowHeight / 2
+      const pointerDistance = Math.abs(centerY / fieldHeight - pointer.y)
+      const pointerForce = pointer.hover ? Math.exp(-pointerDistance * 10) * (pointer.active ? 1 : 0.3) : 0
+      const hardEdge = fieldWidth * (0.86 + Math.pow(u, positionCurve) * 0.12 + (pointer.x - 0.5) * pointerForce * 0.12)
+      const cellCount = 1 + Math.floor(Math.pow(u, lengthCurve) * layer.params.intensity / 100 * 10)
+      const rawWidths = Array.from({ length: cellCount }, (_, cell) => 0.68 + random(seed + row * 103 + cell * 29) * 0.64)
+      const widthTotal = rawWidths.reduce((sum, value) => sum + value, 0)
+      const gap = Math.min(hardEdge / cellCount * 0.42, fieldWidth * layer.params.threshold / 100 * 0.08 * (0.4 + u * 0.6))
+      const rowGap = Math.min(rowHeight * 0.18, fieldHeight * layer.params.threshold / 100 * 0.0005)
+      let x = 0
+      for (let cell = 0; cell < cellCount; cell += 1) {
+        const segment = hardEdge * rawWidths[cell] / widthTotal
+        const rectX = x + gap / 2
+        const rectWidth = Math.max(0.5, segment - gap)
+        const rectY = rowY + rowGap / 2
+        const rectHeight = Math.max(0.5, rowHeight - rowGap)
+        const colorIndex = row + cell
+        let color = layer.color
+        if (layer.colorMode === 'palette') color = this.palette[colorIndex % this.palette.length]
+        else if (sample && pixels) {
+          const px = Math.max(0, Math.min(sample.width - 1, Math.floor((rectX + rectWidth / 2) / fieldWidth * sample.width)))
+          const py = Math.max(0, Math.min(sample.height - 1, Math.floor(centerY / fieldHeight * sample.height)))
+          const pixel = (py * sample.width + px) * 4
+          color = `rgb(${pixels[pixel]},${pixels[pixel + 1]},${pixels[pixel + 2]})`
+        }
+        const localFade = clamp(fade * (0.82 + random(seed + row * 47 + cell * 17) * 0.28))
+        const gradient = ctx.createLinearGradient(rectX, rectY, rectX + rectWidth, rectY)
+        gradient.addColorStop(0, color)
+        if (localFade <= 0.001) gradient.addColorStop(1, color)
+        else {
+          gradient.addColorStop(Math.max(0, 1 - localFade), color)
+          gradient.addColorStop(1, layer.secondaryColor)
+        }
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(rectX, rectY, rectWidth, rectHeight)
+        ctx.clip()
+        ctx.fillStyle = gradient
+        ctx.fillRect(rectX, rectY, rectWidth, rectHeight)
+        if (stripes > 1) {
+          const stripeStep = rectHeight / stripes
+          ctx.fillStyle = layer.secondaryColor
+          for (let stripe = 1; stripe < stripes; stripe += 2) ctx.fillRect(rectX, rectY + stripe * stripeStep, rectWidth, stripeStep * 0.46)
+        }
+        ctx.restore()
+        x += segment
+      }
+      rowY += rowHeight
+    }
+    ctx.restore()
   }
 
   private renderKinetic(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, layer: LabLayer, size: CanvasSize, time: number, pointer: PointerState) {
